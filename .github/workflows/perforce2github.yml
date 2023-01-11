@@ -1,0 +1,89 @@
+name: Perforce to Github
+
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+env:
+  P4PORT: ${{ secrets.P4PORT }}
+  P4USER: ${{ secrets.P4USER }}    
+
+jobs:
+  perforce2github:
+    runs-on: ubuntu-latest
+    name: perforce2github
+    
+    # In GitHub Actions environment variables can be provided at the workflow level, job level, or step level. 
+    # See GitHub documentation for more details: https://docs.github.com/en/actions/learn-github-actions/environment-variables
+    
+    steps:
+      # Checkout assets stored in GitHub
+      - name: Checkout
+        uses: actions/checkout@v2
+        
+      # run trust only if your P4PORT includes "ssl:"
+      - name: p4 trust
+        uses: perforce/setup-p4@v1
+        with:
+          command: trust
+          arguments: -y
+
+      # Install p4 cli and cache it if we are running within a self hosted runner
+      - name: p4 setup
+        uses: perforce/setup-p4@v1
+        id: login
+        with:
+          command: login
+        env:
+          P4PASSWD: ${{ secrets.P4PASSWD }} 
+          
+      # Create a workspace
+      - name: p4 client
+        uses: perforce/setup-p4@v1
+        with:
+          command: client
+          arguments: -i
+          spec: |
+            Client:	github-actions-setup-p4
+            Owner:	${{ secrets.P4USER }}
+            Description:
+              Created by ${{ secrets.P4USER }}.
+            Root:	$GITHUB_WORKSPACE
+            Options:	noallwrite noclobber nocompress unlocked modtime rmdir
+            SubmitOptions:	leaveunchanged
+            LineEnd:	local
+            View:
+              //depot/... //github-actions-setup-p4/...
+      # pull down assets from Helix Core
+      - name: p4 sync
+        uses: perforce/setup-p4@v1
+        id: sync
+        env:
+          P4CLIENT: github-actions-setup-p4
+        with:
+          command: sync
+          arguments: -f
+          
+      - name: Retrieve text 
+        run: |
+          echo "TEXT=$(p4 changes -m1)" >> $GITHUB_ENV
+
+      - name: Extract Data
+        run: |
+         echo "CHANGE=$(ps -ef | awk '{sub(/ on.*/, ""); print }' <<< "${{env.TEXT}}")" >> $GITHUB_ENV
+         echo "USERNAME=$(ps -ef | awk '{ sub(/.*by /, ""); sub(/@.*/, ""); print }' <<< "${{env.TEXT}}")" >> $GITHUB_ENV
+         echo "DESCRIPTION=$(ps - ef | awk '{ sub(/.*@/, ""); $1=""; sub(/ ./, ""); sub(/ \047.*/, ""); print }' <<< "${{env.TEXT}}")" >> $GITHUB_ENV
+         
+      - name: Print variables
+        run: |
+         echo "${{env.TEXT}}"
+         echo "${{env.DESCRIPTION}}"
+         echo "${{env.CHANGE}}"         
+         echo "${{env.USERNAME}}"
+       
+      - name: Add & Commit
+        uses: EndBug/add-and-commit@v9.1.1
+        with:
+          add: '.'
+          default_author: github_actor
+          fetch: false
+          message: ${{env.DESCRIPTION}} (Perforce ${{env.CHANGE}} by ${{env.USERNAME}})

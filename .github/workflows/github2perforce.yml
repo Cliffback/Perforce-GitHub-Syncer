@@ -1,0 +1,106 @@
+name: Github to Perforce
+
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+  # Triggers the workflow on push or pull request events but only for the main branch
+  push:
+    branches: [main]
+env:
+  P4PORT: ${{ secrets.P4PORT }}
+  P4USER: ${{ secrets.P4USER }}    
+  P4IGNORE: ${{ secrets.P4IGNORE }}    
+
+jobs:
+  github2perforce:
+    runs-on: ubuntu-latest
+    name: github2perforce
+
+    # In GitHub Actions environment variables can be provided at the workflow level, job level, or step level. 
+    # See GitHub documentation for more details: https://docs.github.com/en/actions/learn-github-actions/environment-variables
+    
+    steps:
+      # Checkout assets stored in GitHub
+      - name: Checkout
+        uses: actions/checkout@v2
+        
+      # run trust only if your P4PORT includes "ssl:"
+      - name: p4 trust
+        uses: perforce/setup-p4@v1
+        with:
+          command: trust
+          arguments: -y
+
+      # Install p4 cli and cache it if we are running within a self hosted runner
+      - name: p4 setup
+        uses: perforce/setup-p4@v1
+        id: login
+        with:
+          command: login
+        env:
+          P4PASSWD: ${{ secrets.P4PASSWD }}      
+          
+      # Create a workspace
+      - name: p4 client
+        uses: perforce/setup-p4@v1
+        with:
+          command: client
+          arguments: -i
+          spec: |
+            Client:	github-actions-setup-p4
+            Owner:	${{ secrets.P4USER }}
+            Description:
+              Created by ${{ secrets.P4USER }}.
+            Root:	$GITHUB_WORKSPACE
+            Options:	noallwrite noclobber nocompress unlocked modtime rmdir
+            SubmitOptions:	leaveunchanged
+            LineEnd:	local
+            View:
+              //depot/... //github-actions-setup-p4/...
+              
+      - name: Add files in GitHub to changelist
+        uses: perforce/setup-p4@v1
+        env:
+          P4CLIENT: github-actions-setup-p4
+        with:
+          command: add
+          arguments: ...
+          working_directory: $GITHUB_WORKSPACE
+          
+      - name: Update client workspace's have list
+        uses: perforce/setup-p4@v1
+        env:
+          P4CLIENT: github-actions-setup-p4
+        with:
+          command: flush
+
+      - name: Delete files from depot not existing at client
+        uses: perforce/setup-p4@v1
+        env:
+          P4CLIENT: github-actions-setup-p4
+        with:
+          command: reconcile
+          arguments: -d
+          
+      - name: Submit files in changelist to Helix Core
+        uses: perforce/setup-p4@v1
+        continue-on-error: true
+        env:
+          P4CLIENT: github-actions-setup-p4
+        with:
+          command: submit
+          global_options: -I
+          working_directory: "$GITHUB_WORKSPACE"
+          arguments: -d "Seeding data from GitHub to Helix Core"      
+                  
+      - name: Cleanup
+        run: |
+          rm -rf .vscode base
+          
+      - uses: EndBug/add-and-commit@v8
+        with:
+          add: '.'
+          cwd: '.'
+          default_author: github_actions
+          pathspec_error_handling: ignore
+          push: true
